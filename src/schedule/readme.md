@@ -75,3 +75,68 @@ The function calculates the pointer to the register context based on a simple of
 3.  This calculation effectively finds the exact location where the CPU registers were saved on the kernel stack, which is typically at the top of the stack.
 
 By returning this pointer, the function allows other parts of the kernel to access and manipulate the task's saved register state, which is essential for context switching and returning from system calls or interrupts.
+## Submodule: Memory Management and Page Handling
+
+This submodule implements **basic page allocation, virtual memory mapping, and page fault handling** for the minimalistic Raspberry Pi 5 kernel using its ARM-based MMU.
+
+---
+
+### 1. Page Allocation
+
+- **`allocate_free_page()`**:
+  - Scans a bitmap `page_map[]` that tracks free and used physical memory pages.
+  - Marks the first available page as used (1).
+  - Calculates the physical start address using `PHYSICAL_SECOND_START` plus offset.
+  - Clears memory for the allocated page in virtual address space (`mem_init_zero`) to avoid residual data.
+  - Returns the physical address of the allocated page or 0 if no free pages remain.
+
+- **`free_page()`**:
+  - Marks the page as free in the bitmap by setting corresponding entry to 0, enabling reuse.
+
+- **`allocate_kernel_page()`**:
+  - Wrapper calling `allocate_free_page()` and converting to virtual address before returning.
+
+- **`allocate_user_page()`**:
+  - Allocates a free physical page and **maps** it into the user virtual address space for the specified task using `map_page()`.
+
+---
+
+### 2. Page Mapping
+
+- **`map_page()`**:
+  - Ensures the task has a valid Page Global Directory (PGD); allocates one if missing.
+  - Walks the paging hierarchy:
+    - PGD → PUD → PMD → PTE (levels of page tables in ARMv8 architecture).
+  - For each level, `map_table()` either returns an existing table or allocates a new one.
+  - Updates kernel pages bookkeeping in the task’s `mm` struct.
+  - Calls `map_table_entry()` to map the specific virtual address to the allocated physical page with appropriate user-mode page flags.
+  - Logs the user page for bookkeeping.
+
+- **`map_table()`**:
+  - Uses bit-shifting and masking to get the index in the given page table for the virtual address.
+  - Allocates a new table page if no valid entry exists.
+  - Returns the base address of the next level page table or existing entry.
+
+- **`map_table_entry()`**:
+  - Maps a virtual page table entry to a physical page address, along with access permissions and flags (like user mode).
+
+---
+
+### 3. Memory Copy (Fork Support)
+
+- **`copy_virt_mem()`**:
+  - Copies all user pages from the current process to a new destination task.
+  - Allocates new user pages and duplicates memory content via `mem_copy()`.
+  - Ensures process isolation by deeply copying address spaces during fork.
+
+---
+
+### 4. Page Fault Handler
+
+- **`mem_abort_handler()`**:
+  - Handles memory access faults triggered by attempts to access unmapped virtual addresses.
+  - Decodes the fault status (`esr_val`) to check for **data aborts** due to page faults.
+  - Tries to recover by allocating and mapping a new physical page to the faulted address.
+  - Allows limited retries (counts `ind`), panics if unable to handle after 2 attempts.
+  - Logs informational or panic messages accordingly.
+
